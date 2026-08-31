@@ -1,0 +1,17 @@
+{
+  "name": "apartment-monitor",
+  "version": "1.0.0",
+  "description": "Monitor Van der Linden for new apartments and get Telegram notifications",
+  "main": "apartment-monitor.js",
+  "scripts": {
+    "start": "node apartment-monitor.js",
+    "dev": "node apartment-monitor.js"
+  },
+  "dependencies": {
+    "puppeteer": "^21.0.0",
+    "node-telegram-bot-api": "^0.63.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
