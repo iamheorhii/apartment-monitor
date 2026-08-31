@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 
 /**
- * Apartment Monitor Bot - Enhanced Edition
- * Monitors multiple websites for new apartments:
- * - Van der Linden
- * - Amsterdam Mijndak
- * - IkWillHuren
+ * Apartment Monitor Bot - Fixed Edition
+ * - Van der Linden (✅ working)
+ * - IkWillHuren (fixed scraper)
+ * - Better user message logging
  */
 
 const puppeteer = require('puppeteer');
@@ -13,7 +12,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const path = require('path');
 
-// Configuration from environment variables
+// Configuration
 const CONFIG = {
   TELEGRAM_TOKEN: process.env.TELEGRAM_TOKEN || '',
   CHECK_INTERVAL_MINUTES: parseInt(process.env.CHECK_INTERVAL_MINUTES || '15'),
@@ -25,8 +24,6 @@ const CONFIG = {
     'Ouderenhuisvesting',
     'Studentenhuisvesting',
     'Sociale Huurwoning',
-    'Senior',
-    'Student',
   ],
 };
 
@@ -77,16 +74,18 @@ function loadData() {
     console.warn('⚠ Could not load settings:', err.message);
   }
 
-  // Add users from TELEGRAM_CHAT_ID env var
+  // Add users from TELEGRAM_CHAT_ID env var (explicit backup)
   const envChatIds = process.env.TELEGRAM_CHAT_ID;
   if (envChatIds) {
-    envChatIds.split(',').forEach(id => {
-      registeredUsers.add(id.trim());
+    const ids = envChatIds.split(',').map(id => id.trim());
+    ids.forEach(id => {
+      registeredUsers.add(id);
     });
+    console.log(`✓ Added ${ids.length} users from TELEGRAM_CHAT_ID env var`);
   }
 
   console.log(`✓ Loaded ${seenApartments.size} seen apartments`);
-  console.log(`✓ Loaded ${registeredUsers.size} registered users`);
+  console.log(`✓ Loaded ${registeredUsers.size} registered users: ${Array.from(registeredUsers).join(', ')}`);
 }
 
 // Save data files
@@ -115,7 +114,6 @@ function saveData() {
   }
 }
 
-// Get current settings
 function getSettings() {
   return {
     maxPrice: settings.maxPrice || CONFIG.MAX_PRICE,
@@ -133,15 +131,14 @@ function getSettings() {
 async function fetchVanderLindenListings() {
   let browser;
   try {
+    console.log('🔍 Fetching Van der Linden...');
     browser = await puppeteer.launch({
       headless: 'new',
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
 
     const page = await browser.newPage();
-    await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    );
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
 
     await page.goto('https://www.vanderlinden.nl/woning-huren/', {
       waitUntil: 'networkidle2',
@@ -180,6 +177,7 @@ async function fetchVanderLindenListings() {
     });
 
     await browser.close();
+    console.log(`✓ Van der Linden: Found ${apartments.length} apartments`);
     return apartments;
   } catch (err) {
     console.error('❌ Van der Linden error:', err.message);
@@ -188,129 +186,107 @@ async function fetchVanderLindenListings() {
   }
 }
 
-// Fetch from Mijndak
-async function fetchMijndakListings() {
-  let browser;
-  try {
-    browser = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
-
-    const page = await browser.newPage();
-    await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    );
-
-    await page.goto('https://amsterdam.mijndak.nl/WoningOverzicht', {
-      waitUntil: 'networkidle2',
-      timeout: 30000,
-    });
-
-    const apartments = await page.evaluate(() => {
-      const items = [];
-      const selectors = ['[data-testid*="listing"]', '.woning', '.listing-item', 'a[href*="/woning"]'];
-
-      for (const selector of selectors) {
-        document.querySelectorAll(selector).forEach((el) => {
-          const link = el.querySelector('a') || el;
-          const href = link.getAttribute('href');
-          if (href && href.includes('/woning')) {
-            const priceMatch = el.textContent.match(/€\s*([\d.]+)/);
-            const sizeMatch = el.textContent.match(/(\d+)\s*m²/);
-            const price = priceMatch ? parseInt(priceMatch[1].replace(/\./g, '')) : null;
-            const size = sizeMatch ? parseInt(sizeMatch[1]) : null;
-
-            if (price && size && price > 0 && size > 0) {
-              items.push({
-                id: `mijndak-${href.replace(/\//g, '-')}`,
-                address: el.textContent.split('\n')[0]?.trim() || 'Unknown',
-                price,
-                size,
-                url: href.startsWith('http') ? href : 'https://amsterdam.mijndak.nl' + href,
-                site: 'Mijndak',
-                text: el.textContent,
-              });
-            }
-          }
-        });
-        if (items.length > 0) break;
-      }
-      return items;
-    });
-
-    await browser.close();
-    return apartments;
-  } catch (err) {
-    console.error('⚠ Mijndak error:', err.message);
-    if (browser) await browser.close();
-    return [];
-  }
-}
-
-// Fetch from IkWillHuren
+// Fetch from IkWillHuren (IMPROVED)
 async function fetchIkWillHurenListings() {
   let browser;
   try {
+    console.log('🔍 Fetching IkWillHuren...');
     browser = await puppeteer.launch({
       headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+      ]
     });
 
     const page = await browser.newPage();
+
+    // Set realistic headers
     await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     );
 
+    await page.setExtraHTTPHeaders({
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7',
+      'Referer': 'https://www.ikwillhuren.nl/',
+    });
+
+    console.log('  Navigating to site...');
     await page.goto('https://www.ikwillhuren.nl/', {
-      waitUntil: 'networkidle2',
-      timeout: 30000,
+      waitUntil: 'domcontentloaded',
+      timeout: 45000,
+    });
+
+    // Wait for listings to load
+    console.log('  Waiting for listings to load...');
+    await page.waitForSelector('a', { timeout: 10000 }).catch(() => {
+      console.log('  No explicit wait needed, proceeding...');
     });
 
     const apartments = await page.evaluate(() => {
       const items = [];
-      // IkWillHuren typically uses article tags or listing containers
-      const selectors = ['article', '.object-item', '.listing', '[data-testid*="listing"]', 'a[href*="woning"]'];
+      const allLinks = document.querySelectorAll('a');
+      const seen = new Set();
 
-      for (const selector of selectors) {
-        document.querySelectorAll(selector).forEach((el) => {
-          const link = el.querySelector('a') || el;
-          const href = link.getAttribute('href');
+      allLinks.forEach((link) => {
+        const href = link.getAttribute('href');
+        if (!href || seen.has(href)) return;
 
-          if (href && (href.includes('woning') || href.includes('listing') || href.includes('object'))) {
-            const priceMatch = el.textContent.match(/€\s*([\d.,]+)/);
-            const sizeMatch = el.textContent.match(/(\d+)\s*m²/);
+        // Look for apartment listing links
+        if (href.includes('woning') || href.includes('object') || href.includes('listing')) {
+          seen.add(href);
 
-            let price = null;
-            if (priceMatch) {
-              const priceStr = priceMatch[1]
-                .replace(/\./g, '')
-                .replace(/,/g, '.');
-              price = parseInt(parseFloat(priceStr));
-            }
-
-            const size = sizeMatch ? parseInt(sizeMatch[1]) : null;
-            const address = el.textContent.split('\n').find(line => line.trim().length > 5)?.trim() || 'Unknown';
-
-            if (price && size && price > 0 && size > 0 && address) {
-              items.push({
-                id: `ikwh-${href.replace(/\//g, '-')}`,
-                address,
-                price,
-                size,
-                url: href.startsWith('http') ? href : 'https://www.ikwillhuren.nl' + href,
-                site: 'IkWillHuren',
-                text: el.textContent,
-              });
-            }
+          // Get the closest container with text
+          let container = link;
+          for (let i = 0; i < 5; i++) {
+            container = container.parentElement;
+            if (!container) break;
+            if (container.textContent.length > 50) break;
           }
-        });
-        if (items.length > 0) break;
-      }
+
+          const text = container ? container.textContent : link.textContent;
+
+          // Extract price
+          const priceMatch = text.match(/€\s*([\d.,]+)/);
+          let price = null;
+          if (priceMatch) {
+            let priceStr = priceMatch[1]
+              .replace(/\./g, '')  // Remove thousands separators
+              .replace(/,/g, '.');  // Convert comma decimal to dot
+            price = parseInt(parseFloat(priceStr));
+          }
+
+          // Extract size
+          const sizeMatch = text.match(/(\d+)\s*m²/);
+          const size = sizeMatch ? parseInt(sizeMatch[1]) : null;
+
+          // Extract address (first meaningful line)
+          const address = text
+            .split('\n')
+            .map(l => l.trim())
+            .find(l => l.length > 10 && l.length < 100) || 'Unknown';
+
+          if (price && size && price > 0 && size > 0 && address !== 'Unknown') {
+            items.push({
+              id: `ikwh-${href.replace(/[^a-z0-9]/gi, '')}`,
+              address,
+              price,
+              size,
+              url: href.startsWith('http') ? href : 'https://www.ikwillhuren.nl' + href,
+              site: 'IkWillHuren',
+              text,
+            });
+          }
+        }
+      });
+
       return items;
     });
 
     await browser.close();
+    console.log(`✓ IkWillHuren: Found ${apartments.length} apartments`);
     return apartments;
   } catch (err) {
     console.error('⚠ IkWillHuren error:', err.message);
@@ -319,7 +295,7 @@ async function fetchIkWillHurenListings() {
   }
 }
 
-// Filter apartments based on current settings
+// Filter apartments
 function filterApartments(apartments) {
   const currentSettings = getSettings();
 
@@ -338,7 +314,7 @@ function filterApartments(apartments) {
   });
 }
 
-// Send notification to all users
+// Send notification
 async function sendNotification(apartment) {
   const text = `🏠 *New Apartment Found* - ${apartment.site}\n\n` +
     `📍 *Address:* ${apartment.address}\n` +
@@ -346,17 +322,26 @@ async function sendNotification(apartment) {
     `📐 *Size:* ${apartment.size}m²\n\n` +
     `[View Listing](${apartment.url})`;
 
+  console.log(`📤 Sending to ${registeredUsers.size} users: ${apartment.address}`);
+
+  let successCount = 0;
+  let failCount = 0;
+
   for (const chatId of registeredUsers) {
     try {
       await bot.sendMessage(chatId, text, {
         parse_mode: 'Markdown',
         disable_web_page_preview: false,
       });
+      console.log(`  ✓ Sent to ${chatId}`);
+      successCount++;
     } catch (err) {
-      console.error(`❌ Failed to send to ${chatId}:`, err.message);
+      console.error(`  ✗ Failed to send to ${chatId}: ${err.message}`);
+      failCount++;
     }
   }
-  console.log(`📲 Sent notification for: ${apartment.address}`);
+
+  console.log(`📲 Results: ${successCount} sent, ${failCount} failed`);
 }
 
 // ========================================
@@ -365,25 +350,49 @@ async function sendNotification(apartment) {
 
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
+  console.log(`➕ User ${chatId} sent /start`);
+
   if (!registeredUsers.has(String(chatId))) {
     registeredUsers.add(String(chatId));
     saveData();
+    console.log(`✓ Registered new user: ${chatId}`);
     bot.sendMessage(
       chatId,
-      '✅ You\'ve been subscribed! You will now receive apartment notifications from:\n\n🏢 Van der Linden\n🏢 Mijndak\n🏢 IkWillHuren\n\nType /help for available commands.'
+      '✅ You\'ve been subscribed!\n\nYou will now receive apartment notifications from:\n🏢 Van der Linden\n🏢 IkWillHuren\n\nType /help for available commands.'
     );
   } else {
+    console.log(`ℹ User ${chatId} already subscribed`);
     bot.sendMessage(chatId, '✅ You\'re already subscribed!');
   }
 });
 
 bot.onText(/\/stop/, (msg) => {
   const chatId = msg.chat.id;
+  console.log(`➖ User ${chatId} sent /stop`);
+
   if (registeredUsers.has(String(chatId))) {
     registeredUsers.delete(String(chatId));
     saveData();
     bot.sendMessage(chatId, '👋 You\'ve been unsubscribed from apartment notifications.');
   }
+});
+
+bot.onText(/\/debug/, (msg) => {
+  const chatId = msg.chat.id;
+  const debugInfo = `
+📋 *Debug Info*
+
+👥 Registered Users (${registeredUsers.size}):
+${Array.from(registeredUsers).map(u => `  • ${u}`).join('\n')}
+
+🏠 Apartments Tracked: ${seenApartments.size}
+
+📊 Filters:
+  Max Price: €${getSettings().maxPrice}
+  Min Size: ${getSettings().minSize}m²
+  Location: ${getSettings().location}
+`;
+  bot.sendMessage(chatId, debugInfo, { parse_mode: 'Markdown' });
 });
 
 bot.onText(/\/help/, (msg) => {
@@ -392,40 +401,15 @@ bot.onText(/\/help/, (msg) => {
 📋 *Available Commands*
 
 /start - Subscribe to notifications
-/stop - Unsubscribe from notifications
+/stop - Unsubscribe
 /filter - Show current filter settings
 /stats - Show statistics
-/setprice <amount> - Set max price (e.g., /setprice 1200)
-/setsize <amount> - Set min size (e.g., /setsize 50)
-/setcheckinterval <minutes> - Set check frequency (e.g., /setcheckinterval 10)
-/websites - Show monitored websites
+/setprice <amount> - Set max price
+/setsize <amount> - Set min size
+/debug - Show debug information
 /help - Show this message
-
-📡 *Monitored Websites:*
-🏢 Van der Linden
-🏢 Amsterdam Mijndak
-🏢 IkWillHuren
 `;
   bot.sendMessage(chatId, helpText, { parse_mode: 'Markdown' });
-});
-
-bot.onText(/\/websites/, (msg) => {
-  const chatId = msg.chat.id;
-  const websitesText = `
-🌐 *Monitored Websites*
-
-1️⃣ Van der Linden
-   https://www.vanderlinden.nl/woning-huren/
-
-2️⃣ Mijndak
-   https://amsterdam.mijndak.nl/WoningOverzicht
-
-3️⃣ IkWillHuren
-   https://www.ikwillhuren.nl/
-
-The bot checks all three websites every ${getSettings().checkInterval} minutes and sends notifications for new apartments matching your filters.
-`;
-  bot.sendMessage(chatId, websitesText, { parse_mode: 'Markdown' });
 });
 
 bot.onText(/\/filter/, (msg) => {
@@ -437,12 +421,6 @@ bot.onText(/\/filter/, (msg) => {
 💰 Max Price: €${current.maxPrice}/month
 📐 Min Size: ${current.minSize}m²
 📍 Location: ${current.location}
-⏱️ Check Interval: Every ${current.checkInterval} minutes
-
-To change these, use:
-/setprice <amount>
-/setsize <amount>
-/setcheckinterval <minutes>
 `;
   bot.sendMessage(chatId, filterText, { parse_mode: 'Markdown' });
 });
@@ -487,50 +465,37 @@ bot.onText(/\/setsize (.+)/, (msg, match) => {
   bot.sendMessage(chatId, `✅ Min size updated to ${size}m²`);
 });
 
-bot.onText(/\/setcheckinterval (.+)/, (msg, match) => {
-  const chatId = msg.chat.id;
-  const interval = parseInt(match[1]);
-
-  if (isNaN(interval) || interval < 5 || interval > 1440) {
-    bot.sendMessage(chatId, '❌ Please enter a valid interval (5-1440 minutes)');
-    return;
-  }
-
-  settings.checkInterval = interval;
-  saveData();
-  bot.sendMessage(chatId, `✅ Check interval updated to every ${interval} minutes\n\n⚠️ Note: This will take effect on the next deployment.`);
-});
-
 // ========================================
 // MAIN CHECK FUNCTION
 // ========================================
 
 async function checkForNewApartments() {
+  console.log(`\n🔄 Checking for new apartments at ${new Date().toLocaleTimeString()}...`);
+
   if (registeredUsers.size === 0) {
     console.log('⚠ No users subscribed yet');
     return;
   }
 
-  console.log(`\n🔄 Checking for new apartments at ${new Date().toLocaleTimeString()}...`);
+  console.log(`👥 Sending to ${registeredUsers.size} users: ${Array.from(registeredUsers).join(', ')}`);
 
-  // Fetch from all three websites in parallel
-  const [vdlListings, mijndakListings, ikwhListings] = await Promise.all([
+  // Fetch from both websites
+  const [vdlListings, ikwhListings] = await Promise.all([
     fetchVanderLindenListings(),
-    fetchMijndakListings(),
     fetchIkWillHurenListings(),
   ]);
 
-  const allApartments = [...vdlListings, ...mijndakListings, ...ikwhListings];
-  console.log(`Found ${allApartments.length} total apartments (VDL: ${vdlListings.length}, Mijndak: ${mijndakListings.length}, IkWH: ${ikwhListings.length})`);
+  const allApartments = [...vdlListings, ...ikwhListings];
+  console.log(`\n📊 Total apartments found: ${allApartments.length}`);
 
   const newApartments = filterApartments(allApartments);
-  console.log(`Found ${newApartments.length} new apartments matching criteria`);
+  console.log(`✓ Apartments matching criteria: ${newApartments.length}\n`);
 
   if (newApartments.length > 0) {
     for (const apt of newApartments) {
       await sendNotification(apt);
       seenApartments.add(apt.id);
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 1000));
     }
     saveData();
   }
@@ -542,11 +507,10 @@ async function checkForNewApartments() {
 
 async function start() {
   console.log('═══════════════════════════════════════════════════════════');
-  console.log('🤖 Apartment Monitor Bot - Enhanced Edition');
+  console.log('🤖 Apartment Monitor Bot - Fixed Edition');
   console.log('═══════════════════════════════════════════════════════════');
   console.log('🏢 Monitoring Websites:');
   console.log('   • Van der Linden');
-  console.log('   • Mijndak');
   console.log('   • IkWillHuren');
 
   const current = getSettings();
@@ -558,13 +522,11 @@ async function start() {
 
   loadData();
 
-  // Check immediately on start
   await checkForNewApartments();
 
-  // Check periodically
   setInterval(checkForNewApartments, getSettings().checkInterval * 60 * 1000);
 
-  console.log('✓ Bot is running and listening for commands...');
+  console.log('✓ Bot is running and listening for commands...\n');
 }
 
 process.on('unhandledRejection', (err) => {
