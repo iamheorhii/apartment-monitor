@@ -377,10 +377,17 @@ bot.onText(/\/stop/, (msg) => {
   }
 });
 
+bot.onText(/\/myid/, (msg) => {
+  const chatId = msg.chat.id;
+  bot.sendMessage(chatId, `🆔 *Your Chat ID:*\n\n\`${chatId}\`\n\nAdd this to Railway's TELEGRAM_CHAT_ID variable!`, { parse_mode: 'Markdown' });
+});
+
 bot.onText(/\/debug/, (msg) => {
   const chatId = msg.chat.id;
   const debugInfo = `
 📋 *Debug Info*
+
+🆔 Your Chat ID: \`${chatId}\`
 
 👥 Registered Users (${registeredUsers.size}):
 ${Array.from(registeredUsers).map(u => `  • ${u}`).join('\n')}
@@ -389,7 +396,7 @@ ${Array.from(registeredUsers).map(u => `  • ${u}`).join('\n')}
 
 📊 Filters:
   Max Price: €${getSettings().maxPrice}
-  Min Size: ${getSettings().minSize}m²
+  Min Size: €${getSettings().minSize}m²
   Location: ${getSettings().location}
 `;
   bot.sendMessage(chatId, debugInfo, { parse_mode: 'Markdown' });
@@ -406,6 +413,7 @@ bot.onText(/\/help/, (msg) => {
 /stats - Show statistics
 /setprice <amount> - Set max price
 /setsize <amount> - Set min size
+/myid - Show your Chat ID
 /debug - Show debug information
 /help - Show this message
 `;
