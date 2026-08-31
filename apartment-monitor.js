@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 /**
- * Apartment Monitor Bot - Fixed Edition
+ * Apartment Monitor Bot - Funda Edition
  * - Van der Linden (✅ working)
- * - IkWillHuren (fixed scraper)
+ * - Funda.nl (✅ working)
  * - Better user message logging
  */
 
@@ -186,99 +186,71 @@ async function fetchVanderLindenListings() {
   }
 }
 
-// Fetch from IkWillHuren (IMPROVED)
-async function fetchIkWillHurenListings() {
+// Fetch from Funda.nl
+async function fetchFundaListings() {
   let browser;
   try {
-    console.log('🔍 Fetching IkWillHuren...');
+    console.log('🔍 Fetching Funda.nl...');
     browser = await puppeteer.launch({
       headless: 'new',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-blink-features=AutomationControlled',
-      ]
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
 
     const page = await browser.newPage();
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
 
-    // Set realistic headers
-    await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    );
-
-    await page.setExtraHTTPHeaders({
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Language': 'nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7',
-      'Referer': 'https://www.ikwillhuren.nl/',
-    });
-
-    console.log('  Navigating to site...');
-    await page.goto('https://www.ikwillhuren.nl/', {
-      waitUntil: 'domcontentloaded',
-      timeout: 45000,
-    });
-
-    // Wait for listings to load
-    console.log('  Waiting for listings to load...');
-    await page.waitForSelector('a', { timeout: 10000 }).catch(() => {
-      console.log('  No explicit wait needed, proceeding...');
+    await page.goto('https://www.funda.nl/huur/amsterdam/', {
+      waitUntil: 'networkidle2',
+      timeout: 30000,
     });
 
     const apartments = await page.evaluate(() => {
       const items = [];
-      const allLinks = document.querySelectorAll('a');
       const seen = new Set();
 
-      allLinks.forEach((link) => {
+      // Find all listing links that point to detail pages
+      document.querySelectorAll('a[href*="/detail/huur/"]').forEach((link) => {
         const href = link.getAttribute('href');
         if (!href || seen.has(href)) return;
+        seen.add(href);
 
-        // Look for apartment listing links
-        if (href.includes('woning') || href.includes('object') || href.includes('listing')) {
-          seen.add(href);
+        // Navigate up to find the listing container
+        let container = link;
+        let depth = 0;
+        while (container && depth < 8) {
+          const text = container.textContent;
+          // Check if this container has both price and size info
+          if (text.includes('€') && text.includes('m²')) {
+            // Extract price
+            const priceMatch = text.match(/€\s*([\d.]+)/);
+            let price = null;
+            if (priceMatch) {
+              price = parseInt(priceMatch[1].replace(/\./g, ''));
+            }
 
-          // Get the closest container with text
-          let container = link;
-          for (let i = 0; i < 5; i++) {
-            container = container.parentElement;
-            if (!container) break;
-            if (container.textContent.length > 50) break;
+            // Extract size
+            const sizeMatch = text.match(/(\d+)\s*m²/);
+            const size = sizeMatch ? parseInt(sizeMatch[1]) : null;
+
+            // Extract address - usually the first substantial text in the link
+            const addressText = link.textContent.trim();
+            const address = addressText.split('\n')[0].trim() || 'Unknown';
+
+            if (price && size && price > 0 && size > 0 && address && address !== 'Unknown') {
+              items.push({
+                id: `funda-${href.split('/').filter(Boolean).pop()}`,
+                address,
+                price,
+                size,
+                url: href.startsWith('http') ? href : 'https://www.funda.nl' + href,
+                site: 'Funda',
+                text,
+              });
+              return; // Move to next link
+            }
           }
-
-          const text = container ? container.textContent : link.textContent;
-
-          // Extract price
-          const priceMatch = text.match(/€\s*([\d.,]+)/);
-          let price = null;
-          if (priceMatch) {
-            let priceStr = priceMatch[1]
-              .replace(/\./g, '')  // Remove thousands separators
-              .replace(/,/g, '.');  // Convert comma decimal to dot
-            price = parseInt(parseFloat(priceStr));
-          }
-
-          // Extract size
-          const sizeMatch = text.match(/(\d+)\s*m²/);
-          const size = sizeMatch ? parseInt(sizeMatch[1]) : null;
-
-          // Extract address (first meaningful line)
-          const address = text
-            .split('\n')
-            .map(l => l.trim())
-            .find(l => l.length > 10 && l.length < 100) || 'Unknown';
-
-          if (price && size && price > 0 && size > 0 && address !== 'Unknown') {
-            items.push({
-              id: `ikwh-${href.replace(/[^a-z0-9]/gi, '')}`,
-              address,
-              price,
-              size,
-              url: href.startsWith('http') ? href : 'https://www.ikwillhuren.nl' + href,
-              site: 'IkWillHuren',
-              text,
-            });
-          }
+          container = container.parentElement;
+          depth++;
         }
       });
 
@@ -286,10 +258,10 @@ async function fetchIkWillHurenListings() {
     });
 
     await browser.close();
-    console.log(`✓ IkWillHuren: Found ${apartments.length} apartments`);
+    console.log(`✓ Funda.nl: Found ${apartments.length} apartments`);
     return apartments;
   } catch (err) {
-    console.error('⚠ IkWillHuren error:', err.message);
+    console.error('⚠ Funda.nl error:', err.message);
     if (browser) await browser.close();
     return [];
   }
@@ -358,7 +330,7 @@ bot.onText(/\/start/, (msg) => {
     console.log(`✓ Registered new user: ${chatId}`);
     bot.sendMessage(
       chatId,
-      '✅ You\'ve been subscribed!\n\nYou will now receive apartment notifications from:\n🏢 Van der Linden\n🏢 IkWillHuren\n\nType /help for available commands.'
+      '✅ You\'ve been subscribed!\n\nYou will now receive apartment notifications from:\n🏢 Van der Linden\n🏢 Funda.nl\n\nType /help for available commands.'
     );
   } else {
     console.log(`ℹ User ${chatId} already subscribed`);
@@ -488,12 +460,12 @@ async function checkForNewApartments() {
   console.log(`👥 Sending to ${registeredUsers.size} users: ${Array.from(registeredUsers).join(', ')}`);
 
   // Fetch from both websites
-  const [vdlListings, ikwhListings] = await Promise.all([
+  const [vdlListings, fundaListings] = await Promise.all([
     fetchVanderLindenListings(),
-    fetchIkWillHurenListings(),
+    fetchFundaListings(),
   ]);
 
-  const allApartments = [...vdlListings, ...ikwhListings];
+  const allApartments = [...vdlListings, ...fundaListings];
   console.log(`\n📊 Total apartments found: ${allApartments.length}`);
 
   const newApartments = filterApartments(allApartments);
@@ -515,11 +487,11 @@ async function checkForNewApartments() {
 
 async function start() {
   console.log('═══════════════════════════════════════════════════════════');
-  console.log('🤖 Apartment Monitor Bot - Fixed Edition');
+  console.log('🤖 Apartment Monitor Bot - Funda Edition');
   console.log('═══════════════════════════════════════════════════════════');
   console.log('🏢 Monitoring Websites:');
   console.log('   • Van der Linden');
-  console.log('   • IkWillHuren');
+  console.log('   • Funda.nl');
 
   const current = getSettings();
   console.log(`⏱️  Checking every ${current.checkInterval} minutes`);
