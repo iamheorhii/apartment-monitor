@@ -16,9 +16,9 @@
   "author": "George",
   "license": "MIT",
   "dependencies": {
-    "axios": "^1.7.7",
+    "axios": "^1.6.0",
     "cheerio": "^1.0.0-rc.12",
-    "node-telegram-bot-api": "^0.65.0"
+    "node-telegram-bot-api": "^0.63.0"
   },
   "engines": {
     "node": ">=18.0.0"
