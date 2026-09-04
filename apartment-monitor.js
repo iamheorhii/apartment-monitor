@@ -1,16 +1,15 @@
 #!/usr/bin/env node
 
 /**
- * Apartment Monitor Bot - Lightweight Edition
- * - Van der Linden (✅ lightweight scraper)
- * - Funda.nl (✅ lightweight scraper)
+ * Apartment Monitor Bot - Using Telegraf
+ * - Van der Linden (lightweight scraper)
+ * - Funda.nl (lightweight scraper)
  * - Uses axios + cheerio instead of Puppeteer
- * - 100x less memory usage, faster, more reliable
  */
 
 const axios = require('axios');
 const cheerio = require('cheerio');
-const TelegramBot = require('node-telegram-bot-api');
+const { Telegraf } = require('telegraf');
 const fs = require('fs');
 const path = require('path');
 
@@ -47,15 +46,8 @@ if (!CONFIG.TELEGRAM_TOKEN) {
   process.exit(1);
 }
 
-// Initialize Telegram bot
-let bot;
-try {
-  bot = new TelegramBot(CONFIG.TELEGRAM_TOKEN, { polling: true });
-  console.log('✓ Telegram bot initialized');
-} catch (err) {
-  console.error('⚠ Warning: Could not initialize bot:', err.message);
-  // Continue anyway - we can still function without polling
-}
+// Initialize Telegraf bot
+const bot = new Telegraf(CONFIG.TELEGRAM_TOKEN);
 
 // Storage
 let seenApartments = new Set();
@@ -90,7 +82,7 @@ function loadData() {
     console.warn('⚠ Could not load settings:', err.message);
   }
 
-  // Add users from TELEGRAM_CHAT_ID env var (explicit backup)
+  // Add users from TELEGRAM_CHAT_ID env var
   const envChatIds = process.env.TELEGRAM_CHAT_ID;
   if (envChatIds) {
     const ids = envChatIds.split(',').map(id => id.trim());
@@ -143,7 +135,6 @@ function getSettings() {
 // WEBSITE SCRAPERS
 // ========================================
 
-// Fetch from Van der Linden
 async function fetchVanderLindenListings() {
   try {
     console.log('🔍 Fetching Van der Linden...');
@@ -157,7 +148,6 @@ async function fetchVanderLindenListings() {
     const apartments = [];
     const seen = new Set();
 
-    // Find all apartment links
     $('[href*="/huurwoning/"]').each((_, element) => {
       const link = $(element);
       const href = link.attr('href');
@@ -165,11 +155,9 @@ async function fetchVanderLindenListings() {
       if (!href || href.includes('#') || seen.has(href)) return;
       seen.add(href);
 
-      // Get the parent container with listing info
       const parent = link.parent();
       const text = parent.text();
 
-      // Extract data
       const priceMatch = text.match(/€\s*([\d.]+)/);
       const sizeMatch = text.match(/(\d+)\s*m²/);
       const addressMatch = text.match(/^([^€]+)/);
@@ -201,7 +189,6 @@ async function fetchVanderLindenListings() {
   }
 }
 
-// Fetch from Funda.nl
 async function fetchFundaListings() {
   try {
     console.log('🔍 Fetching Funda.nl...');
@@ -215,7 +202,6 @@ async function fetchFundaListings() {
     const apartments = [];
     const seen = new Set();
 
-    // Find all apartment detail links
     $('a[href*="/detail/huur/"]').each((_, element) => {
       const link = $(element);
       const href = link.attr('href');
@@ -223,9 +209,7 @@ async function fetchFundaListings() {
       if (!href || seen.has(href)) return;
       seen.add(href);
 
-      // Get the closest parent that contains price and size
       let current = link;
-      let found = false;
 
       for (let i = 0; i < 8; i++) {
         current = current.parent();
@@ -233,7 +217,6 @@ async function fetchFundaListings() {
 
         const text = current.text();
 
-        // Check if this container has both price and size
         if (text.includes('€') && text.includes('m²')) {
           const priceMatch = text.match(/€\s*([\d.]+)/);
           const sizeMatch = text.match(/(\d+)\s*m²/);
@@ -253,7 +236,6 @@ async function fetchFundaListings() {
                 site: 'Funda',
                 text,
               });
-              found = true;
               break;
             }
           }
@@ -290,11 +272,6 @@ function filterApartments(apartments) {
 
 // Send notification
 async function sendNotification(apartment) {
-  if (!bot) {
-    console.log(`⚠ Bot not initialized, skipping notification for: ${apartment.address}`);
-    return;
-  }
-
   const text = `🏠 *New Apartment Found* - ${apartment.site}\n\n` +
     `📍 *Address:* ${apartment.address}\n` +
     `💰 *Price:* €${apartment.price}/month\n` +
@@ -308,7 +285,7 @@ async function sendNotification(apartment) {
 
   for (const chatId of registeredUsers) {
     try {
-      await bot.sendMessage(chatId, text, {
+      await bot.telegram.sendMessage(chatId, text, {
         parse_mode: 'Markdown',
         disable_web_page_preview: false,
       });
@@ -327,133 +304,95 @@ async function sendNotification(apartment) {
 // TELEGRAM COMMANDS
 // ========================================
 
-// Only register commands if bot is initialized
-if (bot) {
-bot.onText(/\/start/, (msg) => {
-  const chatId = msg.chat.id;
+bot.start((ctx) => {
+  const chatId = String(ctx.from.id);
   console.log(`➕ User ${chatId} sent /start`);
 
-  if (!registeredUsers.has(String(chatId))) {
-    registeredUsers.add(String(chatId));
+  if (!registeredUsers.has(chatId)) {
+    registeredUsers.add(chatId);
     saveData();
     console.log(`✓ Registered new user: ${chatId}`);
-    bot.sendMessage(
-      chatId,
-      '✅ You\'ve been subscribed!\n\nYou will now receive apartment notifications from:\n🏢 Van der Linden\n🏢 Funda.nl\n\nType /help for available commands.'
-    );
+    ctx.reply('✅ You\'ve been subscribed!\n\nYou will now receive apartment notifications from:\n🏢 Van der Linden\n🏢 Funda.nl\n\nType /help for available commands.');
   } else {
     console.log(`ℹ User ${chatId} already subscribed`);
-    bot.sendMessage(chatId, '✅ You\'re already subscribed!');
+    ctx.reply('✅ You\'re already subscribed!');
   }
 });
 
-bot.onText(/\/stop/, (msg) => {
-  const chatId = msg.chat.id;
+bot.command('stop', (ctx) => {
+  const chatId = String(ctx.from.id);
   console.log(`➖ User ${chatId} sent /stop`);
 
-  if (registeredUsers.has(String(chatId))) {
-    registeredUsers.delete(String(chatId));
+  if (registeredUsers.has(chatId)) {
+    registeredUsers.delete(chatId);
     saveData();
-    bot.sendMessage(chatId, '👋 You\'ve been unsubscribed from apartment notifications.');
+    ctx.reply('👋 You\'ve been unsubscribed from apartment notifications.');
   }
 });
 
-bot.onText(/\/myid/, (msg) => {
-  const chatId = msg.chat.id;
-  bot.sendMessage(chatId, `🆔 *Your Chat ID:*\n\n\`${chatId}\`\n\nAdd this to Railway's TELEGRAM_CHAT_ID variable!`, { parse_mode: 'Markdown' });
+bot.command('myid', (ctx) => {
+  const chatId = ctx.from.id;
+  ctx.reply(`🆔 *Your Chat ID:*\n\n\`${chatId}\`\n\nAdd this to Railway's TELEGRAM_CHAT_ID variable!`, { parse_mode: 'Markdown' });
 });
 
-bot.onText(/\/debug/, (msg) => {
-  const chatId = msg.chat.id;
-  const debugInfo = `
-📋 *Debug Info*
-
-🆔 Your Chat ID: \`${chatId}\`
-
-👥 Registered Users (${registeredUsers.size}):
-${Array.from(registeredUsers).map(u => `  • ${u}`).join('\n')}
-
-🏠 Apartments Tracked: ${seenApartments.size}
-
-📊 Filters:
-  Max Price: €${getSettings().maxPrice}
-  Min Size: ${getSettings().minSize}m²
-  Location: ${getSettings().location}
-`;
-  bot.sendMessage(chatId, debugInfo, { parse_mode: 'Markdown' });
-});
-
-bot.onText(/\/help/, (msg) => {
-  const chatId = msg.chat.id;
-  const helpText = `
-📋 *Available Commands*
-
-/start - Subscribe to notifications
+bot.command('help', (ctx) => {
+  const helpText = `/start - Subscribe to notifications
 /stop - Unsubscribe
 /filter - Show current filter settings
 /stats - Show statistics
 /setprice <amount> - Set max price
 /setsize <amount> - Set min size
 /myid - Show your Chat ID
-/debug - Show debug information
-/help - Show this message
-`;
-  bot.sendMessage(chatId, helpText, { parse_mode: 'Markdown' });
+/help - Show this message`;
+  ctx.reply(helpText);
 });
 
-bot.onText(/\/filter/, (msg) => {
-  const chatId = msg.chat.id;
+bot.command('filter', (ctx) => {
   const current = getSettings();
-  const filterText = `
-🔍 *Current Filters*
+  const filterText = `🔍 *Current Filters*
 
 💰 Max Price: €${current.maxPrice}/month
 📐 Min Size: ${current.minSize}m²
-📍 Location: ${current.location}
-`;
-  bot.sendMessage(chatId, filterText, { parse_mode: 'Markdown' });
+📍 Location: ${current.location}`;
+  ctx.reply(filterText, { parse_mode: 'Markdown' });
 });
 
-bot.onText(/\/stats/, (msg) => {
-  const chatId = msg.chat.id;
-  const statsText = `
-📊 *Statistics*
+bot.command('stats', (ctx) => {
+  const statsText = `📊 *Statistics*
 
 👥 Total Users: ${registeredUsers.size}
 🏠 Apartments Tracked: ${seenApartments.size}
-⏱️ Last Check: ${new Date().toLocaleTimeString()}
-`;
-  bot.sendMessage(chatId, statsText, { parse_mode: 'Markdown' });
+⏱️ Last Check: ${new Date().toLocaleTimeString()}`;
+  ctx.reply(statsText, { parse_mode: 'Markdown' });
 });
 
-bot.onText(/\/setprice (.+)/, (msg, match) => {
-  const chatId = msg.chat.id;
-  const price = parseInt(match[1]);
+bot.command('setprice', (ctx) => {
+  const args = ctx.message.text.split(' ');
+  const price = parseInt(args[1]);
 
   if (isNaN(price) || price < 100) {
-    bot.sendMessage(chatId, '❌ Please enter a valid price (minimum €100)');
+    ctx.reply('❌ Please enter a valid price (minimum €100)');
     return;
   }
 
   settings.maxPrice = price;
   saveData();
-  bot.sendMessage(chatId, `✅ Max price updated to €${price}/month`);
+  ctx.reply(`✅ Max price updated to €${price}/month`);
 });
 
-bot.onText(/\/setsize (.+)/, (msg, match) => {
-  const chatId = msg.chat.id;
-  const size = parseInt(match[1]);
+bot.command('setsize', (ctx) => {
+  const args = ctx.message.text.split(' ');
+  const size = parseInt(args[1]);
 
   if (isNaN(size) || size < 20) {
-    bot.sendMessage(chatId, '❌ Please enter a valid size (minimum 20m²)');
+    ctx.reply('❌ Please enter a valid size (minimum 20m²)');
     return;
   }
 
   settings.minSize = size;
   saveData();
-  bot.sendMessage(chatId, `✅ Min size updated to ${size}m²`);
+  ctx.reply(`✅ Min size updated to ${size}m²`);
 });
-} // End of bot handlers
 
 // ========================================
 // MAIN CHECK FUNCTION
@@ -469,7 +408,6 @@ async function checkForNewApartments() {
 
   console.log(`👥 Sending to ${registeredUsers.size} users: ${Array.from(registeredUsers).join(', ')}`);
 
-  // Fetch from both websites in parallel
   const [vdlListings, fundaListings] = await Promise.all([
     fetchVanderLindenListings(),
     fetchFundaListings(),
@@ -497,7 +435,7 @@ async function checkForNewApartments() {
 
 async function start() {
   console.log('═══════════════════════════════════════════════════════════');
-  console.log('🤖 Apartment Monitor Bot - Lightweight Edition');
+  console.log('🤖 Apartment Monitor Bot - Telegraf Edition');
   console.log('═══════════════════════════════════════════════════════════');
   console.log('🏢 Monitoring Websites:');
   console.log('   • Van der Linden');
@@ -513,21 +451,36 @@ async function start() {
 
   loadData();
 
+  // Start bot
+  bot.launch().catch(err => {
+    console.error('⚠ Bot launch error:', err.message);
+  });
+
+  // Initial check
   await checkForNewApartments();
 
+  // Regular checks
   setInterval(checkForNewApartments, getSettings().checkInterval * 60 * 1000);
 
   console.log('✓ Bot is running and listening for commands...\n');
+
+  // Graceful shutdown
+  process.once('SIGINT', () => {
+    console.log('\n👋 Shutting down gracefully...');
+    saveData();
+    bot.stop();
+    process.exit(0);
+  });
+
+  process.once('SIGTERM', () => {
+    console.log('\n👋 Shutting down gracefully...');
+    saveData();
+    bot.stop();
+    process.exit(0);
+  });
 }
 
-process.on('unhandledRejection', (err) => {
-  console.error('❌ Unhandled error:', err);
+start().catch(err => {
+  console.error('❌ Startup error:', err);
+  process.exit(1);
 });
-
-process.on('SIGINT', () => {
-  console.log('\n👋 Shutting down gracefully...');
-  saveData();
-  process.exit(0);
-});
-
-start().catch(console.error);
