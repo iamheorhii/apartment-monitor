@@ -48,7 +48,14 @@ if (!CONFIG.TELEGRAM_TOKEN) {
 }
 
 // Initialize Telegram bot
-const bot = new TelegramBot(CONFIG.TELEGRAM_TOKEN, { polling: true });
+let bot;
+try {
+  bot = new TelegramBot(CONFIG.TELEGRAM_TOKEN, { polling: true });
+  console.log('✓ Telegram bot initialized');
+} catch (err) {
+  console.error('⚠ Warning: Could not initialize bot:', err.message);
+  // Continue anyway - we can still function without polling
+}
 
 // Storage
 let seenApartments = new Set();
@@ -283,6 +290,11 @@ function filterApartments(apartments) {
 
 // Send notification
 async function sendNotification(apartment) {
+  if (!bot) {
+    console.log(`⚠ Bot not initialized, skipping notification for: ${apartment.address}`);
+    return;
+  }
+
   const text = `🏠 *New Apartment Found* - ${apartment.site}\n\n` +
     `📍 *Address:* ${apartment.address}\n` +
     `💰 *Price:* €${apartment.price}/month\n` +
@@ -315,6 +327,8 @@ async function sendNotification(apartment) {
 // TELEGRAM COMMANDS
 // ========================================
 
+// Only register commands if bot is initialized
+if (bot) {
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   console.log(`➕ User ${chatId} sent /start`);
@@ -439,6 +453,7 @@ bot.onText(/\/setsize (.+)/, (msg, match) => {
   saveData();
   bot.sendMessage(chatId, `✅ Min size updated to ${size}m²`);
 });
+} // End of bot handlers
 
 // ========================================
 // MAIN CHECK FUNCTION
